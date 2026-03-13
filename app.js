@@ -28,6 +28,22 @@ let frontendConfig = null;
 let statsTimer = null;
 let waitingTimer = null;
 
+function getOrCreateStorageId(storage, key) {
+  let value = storage.getItem(key);
+  if (value) return value;
+
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    value = window.crypto.randomUUID();
+  } else {
+    value = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+  storage.setItem(key, value);
+  return value;
+}
+
+const currentUserId = getOrCreateStorageId(localStorage, 'bitnet_user_id');
+const currentSessionId = getOrCreateStorageId(sessionStorage, 'bitnet_session_id');
+
 apiKeyInput.value = localStorage.getItem('bitnet_api_key') || 'your-secret-key-here';
 const savedUseProxy = localStorage.getItem('bitnet_use_proxy');
 useProxyInput.checked = savedUseProxy === null ? true : savedUseProxy === 'true';
@@ -122,6 +138,65 @@ function parseNum(value, fallback) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function formatNumber(value) {
+  if (value == null || Number.isNaN(Number(value))) return 'n/a';
+  return new Intl.NumberFormat().format(Number(value));
+}
+
+function formatMetric(value, suffix = '') {
+  if (value == null || Number.isNaN(Number(value))) return 'n/a';
+  return `${Number(value).toFixed(2)}${suffix}`;
+}
+
+function formatCompactDate(timestamp) {
+  if (!timestamp) return 'n/a';
+  return new Date(timestamp * 1000).toLocaleString([], {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function summarizeRange(range, suffix = '') {
+  if (!range || range.avg == null) return 'n/a';
+  return `avg ${formatMetric(range.avg, suffix)} | min ${formatMetric(range.min, suffix)} | max ${formatMetric(range.max, suffix)}`;
+}
+
+function stripAssistantNoise(text) {
+  let cleaned = String(text || '');
+  const patterns = [
+    /llama_perf_[^\n]*/gi,
+    /llm_perf_[^\n]*/gi,
+    /(?:load|sampling|prompt eval|eval|total)\s+time\s*=\s*[^\n]*/gi,
+    /\b\d+\s+(?:runs|tokens)\s*\(\s*[\d.]+\s*ms per token,\s*[\d.]+\s*tokens per second\s*\)/gi,
+    /\b[\d.]+\s*ms per token,\s*[\d.]+\s*tokens per second\b/gi,
+    /^\s*tokens\s*$/gim
+  ];
+  for (const pattern of patterns) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+  cleaned = cleaned.replace(/\n\s*\n+/g, '\n').replace(/ {2,}/g, ' ').trim();
+  return cleaned;
+}
+
+function statsHeaders(apiKey) {
+  return {
+    'X-API-KEY': apiKey,
+    'X-User-ID': currentUserId,
+    'X-Session-ID': currentSessionId
+  };
 }
 
 function updateEdgeTabPositions() {
@@ -249,7 +324,7 @@ async function loadFrontendConfig() {
   try {
     const base = getApiBase();
     const response = await fetch(`${base}${apiRoute('/frontend-config')}`, {
-      headers: { 'X-API-KEY': apiKey }
+      headers: statsHeaders(apiKey)
     });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -296,19 +371,128 @@ function getRuntimeOptions() {
   return { model, n_predict, threads, ctx_size, temperature };
 }
 
+function renderUsageTable(title, rows) {
+  if (!rows || !rows.length) {
+    return `<section class="stats-section"><h3>${escapeHtml(title)}</h3><div class="stats-card">No data yet.</div></section>`;
+  }
+
+  const body = rows.slice(0, 12).map((row) => `
+    <tr>
+      <td>${escapeHtml(row.label)}</td>
+      <td>${formatNumber(row.messages)}</td>
+      <td>${formatNumber(row.sessions)}</td>
+      <td>${formatNumber(row.total_tokens)}</td>
+      <td>${row.total_time_ms?.avg != null ? formatMetric(row.total_time_ms.avg, ' ms') : 'n/a'}</td>
+      <td>${row.eval_tokens_per_second?.avg != null ? formatMetric(row.eval_tokens_per_second.avg) : 'n/a'}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <section class="stats-section">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="stats-table-wrap">
+        <table class="stats-table">
+          <thead>
+            <tr><th>Period</th><th>Msgs</th><th>Sessions</th><th>Tokens</th><th>Latency</th><th>Tok/s</th></tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderRuntimeTable(title, rows) {
+  if (!rows || !rows.length) {
+    return `<section class="stats-section"><h3>${escapeHtml(title)}</h3><div class="stats-card">No runtime history yet.</div></section>`;
+  }
+  const body = rows.slice(0, 12).map((row) => `
+    <tr>
+      <td>${escapeHtml(row.label)}</td>
+      <td>${row.cpu_usage_percent?.avg != null ? formatMetric(row.cpu_usage_percent.avg, '%') : 'n/a'}</td>
+      <td>${row.memory_used_percent?.avg != null ? formatMetric(row.memory_used_percent.avg, '%') : 'n/a'}</td>
+      <td>${row.gpu_utilization_percent?.avg != null ? formatMetric(row.gpu_utilization_percent.avg, '%') : 'n/a'}</td>
+    </tr>
+  `).join('');
+  return `
+    <section class="stats-section">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="stats-table-wrap">
+        <table class="stats-table">
+          <thead>
+            <tr><th>Period</th><th>CPU avg</th><th>Mem avg</th><th>GPU avg</th></tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderRuntimeSampleTable(title, rows) {
+  if (!rows || !rows.length) {
+    return `<section class="stats-section"><h3>${escapeHtml(title)}</h3><div class="stats-card">No last-hour runtime samples yet.</div></section>`;
+  }
+  const body = rows.slice(0, 12).map((row) => `
+    <tr>
+      <td>${escapeHtml(formatCompactDate(row.timestamp))}</td>
+      <td>${row.cpu_usage_percent != null ? formatMetric(row.cpu_usage_percent, '%') : 'n/a'}</td>
+      <td>${row.memory_used_percent != null ? formatMetric(row.memory_used_percent, '%') : 'n/a'}</td>
+      <td>${row.gpu_utilization_percent != null ? formatMetric(row.gpu_utilization_percent, '%') : 'n/a'}</td>
+    </tr>
+  `).join('');
+  return `
+    <section class="stats-section">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="stats-table-wrap">
+        <table class="stats-table">
+          <thead>
+            <tr><th>Sample</th><th>CPU</th><th>Mem</th><th>GPU</th></tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderStats(stats) {
-  const gpuCards = (stats.gpus || []).map((gpu) => {
-    return `<div class="stats-card"><strong>GPU ${gpu.index}: ${gpu.name}</strong><br/>Util: ${gpu.utilization_percent}%<br/>Mem: ${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB<br/>Temp: ${gpu.temperature_c} C</div>`;
+  const runtime = stats.runtime || {};
+  const usage = stats.usage || {};
+  const latest = usage.latest_chat;
+  const gpuCards = (runtime.gpus || []).map((gpu) => {
+    return `<div class="stats-card"><strong>GPU ${escapeHtml(gpu.index)}: ${escapeHtml(gpu.name)}</strong><br/>Util: ${formatMetric(gpu.utilization_percent, '%')}<br/>Mem: ${formatNumber(gpu.memory_used_mb)} / ${formatNumber(gpu.memory_total_mb)} MB<br/>Temp: ${formatMetric(gpu.temperature_c, ' C')}</div>`;
   }).join('');
-  const cpuUsage = stats.cpu && stats.cpu.usage_percent != null ? `${stats.cpu.usage_percent}%` : 'warming up';
-  const memory = stats.memory
-    ? `${stats.memory.used_percent}% (${Math.round(stats.memory.used_bytes / (1024 * 1024))} / ${Math.round(stats.memory.total_bytes / (1024 * 1024))} MB)`
+  const cpuUsage = runtime.cpu && runtime.cpu.usage_percent != null ? `${runtime.cpu.usage_percent}%` : 'warming up';
+  const memory = runtime.memory
+    ? `${runtime.memory.used_percent}% (${Math.round(runtime.memory.used_bytes / (1024 * 1024))} / ${Math.round(runtime.memory.total_bytes / (1024 * 1024))} MB)`
     : 'n/a';
 
+  const latestCard = latest
+    ? `<div class="stats-card stats-card-wide"><strong>Latest Reply</strong><br/>${escapeHtml(formatCompactDate(latest.timestamp))}<br/>Model: ${escapeHtml(latest.model || 'n/a')}<br/>Prompt: ${formatNumber(latest.prompt_tokens)} tok | Reply: ${formatNumber(latest.completion_tokens)} tok | Total: ${formatNumber(latest.total_tokens)} tok<br/>Latency: ${formatMetric(latest.total_time_ms, ' ms')}<br/>Prompt speed: ${formatMetric(latest.prompt_tokens_per_second)} tok/s | Reply speed: ${formatMetric(latest.eval_tokens_per_second)} tok/s | Sampling: ${formatMetric(latest.sampling_time_ms, ' ms')}</div>`
+    : '<div class="stats-card stats-card-wide"><strong>Latest Reply</strong><br/>No completed chat metrics yet.</div>';
+
+  const totals = usage.totals || {};
   statsBody.innerHTML = `
-    <div class="stats-card"><strong>CPU</strong><br/>Usage: ${cpuUsage}<br/>Cores: ${stats.cpu?.cores ?? 'n/a'}</div>
-    <div class="stats-card"><strong>Memory</strong><br/>Used: ${memory}</div>
-    ${gpuCards || '<div class="stats-card"><strong>GPU</strong><br/>No NVIDIA GPU stats available.</div>'}
+    <section class="stats-section">
+      <h3>Overview</h3>
+      <div class="stats-grid">
+        <div class="stats-card"><strong>CPU</strong><br/>Usage: ${cpuUsage}<br/>Cores: ${runtime.cpu?.cores ?? 'n/a'}</div>
+        <div class="stats-card"><strong>Memory</strong><br/>Used: ${memory}</div>
+        <div class="stats-card"><strong>User Totals</strong><br/>Sessions: ${formatNumber(totals.sessions)}<br/>Messages: ${formatNumber(totals.messages)}<br/>Tokens: ${formatNumber(totals.total_tokens)}</div>
+        <div class="stats-card"><strong>Token Split</strong><br/>Prompt: ${formatNumber(totals.prompt_tokens)}<br/>Reply: ${formatNumber(totals.completion_tokens)}<br/>User: ${escapeHtml(usage.user_id || 'n/a')}</div>
+        ${latestCard}
+        ${gpuCards || '<div class="stats-card"><strong>GPU</strong><br/>No NVIDIA GPU stats available.</div>'}
+      </div>
+    </section>
+    ${renderUsageTable('Last Hour Detail', usage.last_hour)}
+    ${renderRuntimeSampleTable('Last Hour Runtime', stats.runtime_history?.last_hour)}
+    ${renderUsageTable('Daily Usage', usage.daily)}
+    ${renderUsageTable('Weekly Usage', usage.weekly)}
+    ${renderUsageTable('Monthly Usage', usage.monthly)}
+    ${renderRuntimeTable('Runtime Trend', stats.runtime_history?.daily || [])}
+    ${renderRuntimeTable('Weekly Runtime', stats.runtime_history?.weekly || [])}
+    ${renderRuntimeTable('Monthly Runtime', stats.runtime_history?.monthly || [])}
   `;
 }
 
@@ -318,7 +502,7 @@ async function refreshStats() {
   const base = getApiBase();
   try {
     const response = await fetch(`${base}${apiRoute('/stats')}`, {
-      headers: { 'X-API-KEY': apiKey }
+      headers: statsHeaders(apiKey)
     });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -349,6 +533,7 @@ async function send() {
 
   addMessage('user', prompt);
   const aiBox = addMessage('ai', '');
+  let assistantText = '';
   startWaitingAnimation(aiBox);
   setStatus('streaming...');
   activeController = new AbortController();
@@ -360,7 +545,9 @@ async function send() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-KEY': apiKey
+        'X-API-KEY': apiKey,
+        'X-User-ID': currentUserId,
+        'X-Session-ID': currentSessionId
       },
       body: JSON.stringify({ prompt, ...runtime }),
       signal: activeController.signal
@@ -407,7 +594,8 @@ async function send() {
         }
         if (dataLines.length) {
           stopWaitingAnimation(aiBox);
-          aiBox.textContent += dataLines.join('\n');
+          assistantText += dataLines.join('\n');
+          aiBox.textContent = stripAssistantNoise(assistantText);
           chat.scrollTop = chat.scrollHeight;
         }
       }

@@ -440,9 +440,6 @@ def _start_runtime_sampler() -> None:
     threading.Thread(target=_sampler, name="bitnet-runtime-stats", daemon=True).start()
 
 
-_start_runtime_sampler()
-
-
 def _llama_cli_path(bitnet_repo_abs: str) -> str:
     if platform.system() == "Windows":
         release_path = os.path.join(bitnet_repo_abs, "build", "bin", "Release", "llama-cli.exe")
@@ -634,11 +631,11 @@ def _strip_runtime_noise_from_text(text: str) -> str:
     cleaned = cleaned.replace(")llama_perf_", ")\nllama_perf_")
     cleaned = _INLINE_RUNTIME_NOISE_RE.sub("", cleaned)
     cleaned = _INLINE_PERF_FRAGMENT_RE.sub("", cleaned)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"\n\s*\n+", "\n", cleaned)
     if cleaned.strip().lower() == "tokens":
         return ""
-    return cleaned.strip() if "\n" not in cleaned else cleaned.strip("\n")
+    return cleaned.strip("\n\r")
 
 
 def _extract_perf_metrics(raw_text: str) -> dict[str, float | int | None]:
@@ -828,6 +825,9 @@ def _read_gpu_stats() -> list[dict]:
     return rows
 
 
+    _start_runtime_sampler()
+
+
 def stream_bitnet(prompt: str, options: RuntimeOptions, user_id: str, session_id: str) -> Iterable[str]:
     try:
         cmd = _build_command(prompt, options)
@@ -862,6 +862,7 @@ def stream_bitnet(prompt: str, options: RuntimeOptions, user_id: str, session_id
     pending = ""
     generated_so_far = ""
     short_sent_len = 0
+    short_prompt_complete = False
     stream_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     raw_output_parts: list[str] = []
     assistant_text_parts: list[str] = []
@@ -913,17 +914,14 @@ def stream_bitnet(prompt: str, options: RuntimeOptions, user_id: str, session_id
             if short_prompt_mode:
                 generated_so_far += emit_text
                 sentence = _first_sentence(generated_so_far)
-                if sentence:
+                if sentence and not short_prompt_complete:
                     delta = sentence[short_sent_len:]
                     if delta:
                         assistant_text_parts.append(delta)
                         yield _sse_event(delta)
                         short_sent_len = len(sentence)
                 if re.search(r"[.!?](?:\s|$)", sentence or ""):
-                    stopped_early = True
-                    if process.poll() is None:
-                        process.terminate()
-                    break
+                    short_prompt_complete = True
             else:
                 assistant_text_parts.append(emit_text)
                 yield _sse_event(emit_text)
@@ -1032,6 +1030,7 @@ async def runtime_stats(
     assert x_api_key is not None
     user_id = _resolve_user_id(x_api_key, x_user_id)
     now_ts = int(time.time())
+    STATS_STORE.record_runtime_sample(_runtime_history_sample())
     current_memory = _read_memory_stats()
     current_gpus = _read_gpu_stats()
     return {
