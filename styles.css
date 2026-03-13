@@ -170,7 +170,7 @@ body {
 
 .edge-tab {
   position: fixed;
-  top: 50vh;
+  top: var(--edge-tab-top, 160px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -182,6 +182,7 @@ body {
   transform: translateY(-50%);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28);
   z-index: 20;
+  transition: left 260ms ease, right 260ms ease, top 260ms ease, transform 140ms ease;
 }
 
 .edge-tab:hover {
@@ -215,7 +216,7 @@ body {
 }
 
 #options-btn {
-  left: 0;
+  left: var(--options-tab-offset, 0px);
   border-left: 0;
   border-radius: 0 999px 999px 0;
   background: linear-gradient(120deg, #6ed4f3, #5cd4ab);
@@ -223,7 +224,7 @@ body {
 }
 
 #stats-btn {
-  right: 0;
+  right: var(--stats-tab-offset, 0px);
   border-right: 0;
   border-radius: 999px 0 0 999px;
   background: linear-gradient(120deg, #f0da6b, #e98f57);

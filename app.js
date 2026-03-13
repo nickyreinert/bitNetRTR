@@ -12,6 +12,8 @@ const tempInput = document.getElementById('bitnet-temp');
 const optionsBtn = document.getElementById('options-btn');
 const settingsDrawer = document.getElementById('settings-drawer');
 const settingsCloseBtn = document.getElementById('settings-close');
+const mainPane = document.querySelector('.main-pane');
+const topbar = document.querySelector('.topbar');
 
 const statsBtn = document.getElementById('stats-btn');
 const statsDrawer = document.getElementById('stats-drawer');
@@ -121,11 +123,40 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function updateEdgeTabPositions() {
+  const buttonHeight = optionsBtn.getBoundingClientRect().height || 60;
+  const chatTop = chat.getBoundingClientRect().top;
+  const alignedTop = Math.max(32, chatTop + (buttonHeight / 2));
+
+  document.documentElement.style.setProperty(' --edge-tab-top'.trim(), `${alignedTop}px`);
+
+  let optionsOffset = 0;
+  let statsOffset = 0;
+
+  if (shell.classList.contains('show-left')) {
+    const settingsRect = settingsDrawer.getBoundingClientRect();
+    optionsOffset = Math.max(0, settingsRect.left);
+  }
+
+  if (shell.classList.contains('show-right')) {
+    const statsRect = statsDrawer.getBoundingClientRect();
+    statsOffset = Math.max(0, window.innerWidth - statsRect.right);
+  }
+
+  document.documentElement.style.setProperty(' --options-tab-offset'.trim(), `${optionsOffset}px`);
+  document.documentElement.style.setProperty(' --stats-tab-offset'.trim(), `${statsOffset}px`);
+}
+
+function syncLayout() {
+  window.requestAnimationFrame(updateEdgeTabPositions);
+}
+
 function closeStatsDrawer() {
   shell.classList.remove('show-right');
   statsDrawer.setAttribute('aria-hidden', 'true');
   clearInterval(statsTimer);
   statsTimer = null;
+  syncLayout();
 }
 
 function openStatsDrawer() {
@@ -137,6 +168,7 @@ function openStatsDrawer() {
   refreshStats();
   clearInterval(statsTimer);
   statsTimer = setInterval(refreshStats, 2000);
+  syncLayout();
 }
 
 function toggleStatsDrawer() {
@@ -150,6 +182,7 @@ function toggleStatsDrawer() {
 function closeSettingsDrawer() {
   shell.classList.remove('show-left');
   settingsDrawer.setAttribute('aria-hidden', 'true');
+  syncLayout();
 }
 
 function openSettingsDrawer() {
@@ -159,6 +192,7 @@ function openSettingsDrawer() {
   statsTimer = null;
   shell.classList.add('show-left');
   settingsDrawer.setAttribute('aria-hidden', 'false');
+  syncLayout();
 }
 
 function toggleSettingsDrawer() {
@@ -205,6 +239,7 @@ function applyFrontendConfig(config) {
   if (!config.stats_enabled) {
     closeStatsDrawer();
   }
+  syncLayout();
 }
 
 async function loadFrontendConfig() {
@@ -427,5 +462,8 @@ msgInput.addEventListener('keydown', (event) => {
   }
 });
 
+window.addEventListener('resize', syncLayout);
+
 loadFrontendConfig();
 setStreamingUi(false);
+syncLayout();
