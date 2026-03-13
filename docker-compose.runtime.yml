@@ -1,0 +1,4 @@
+services:
+  bitnet-api:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ""

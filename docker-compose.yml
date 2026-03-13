@@ -1,0 +1,31 @@
+services:
+  bitnet-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bitnet-backend
+    working_dir: /app/BitNet
+    volumes:
+      - .:/app/BitNet
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    ports:
+      - "${API_BIND_HOST:-0.0.0.0}:${API_PORT:-8000}:8000"
+    environment:
+      API_KEY: ${API_KEY:-your-secret-key-here}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      CC: clang
+      CXX: clang++
+    command: python3 app.py
+    restart: unless-stopped
+
+  bitnet-ui:
+    image: nginx:alpine
+    container_name: bitnet-frontend
+    volumes:
+      - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${UI_BIND_HOST:-0.0.0.0}:${UI_PORT:-8080}:80"
+    depends_on:
+      - bitnet-api
+    restart: unless-stopped

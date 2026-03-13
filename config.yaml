@@ -1,0 +1,19 @@
+global:
+    stats_enabled: true
+    bitnet:
+        models: 
+            - "models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf"
+            - "models/BitNet-b1.58-2B-4T/ggml-model-i2_m.gguf"
+        repo_dir: third_party/BitNet
+        conversation_mode: true
+        limits:
+            threads: 4
+            context_size: 4096
+            n_predict: 256
+        defaults:
+            model: "models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf"
+            threads: 4
+            context_size: 4096
+            n_predict: 256
+            temperature: 0.8
+        
