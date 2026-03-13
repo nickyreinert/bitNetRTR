@@ -15,5 +15,5 @@ global:
             threads: 4
             context_size: 4096
             n_predict: 256
-            temperature: 0.8
+            temperature: 0.6
         
