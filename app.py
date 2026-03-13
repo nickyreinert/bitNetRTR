@@ -38,6 +38,11 @@ DEFAULT_THREADS = 2
 DEFAULT_CTX_SIZE = 2048
 DEFAULT_TEMPERATURE = 0.8
 DEFAULT_MAX_N_PREDICT = 4096
+DEFAULT_REPEAT_PENALTY = 1.1
+DEFAULT_REPEAT_LAST_N = 64
+DEFAULT_TOP_K = 40
+DEFAULT_TOP_P = 0.9
+DEFAULT_MIN_P = 0.05
 STATS_DIR = Path(APP_ROOT) / ".bitnet-stats"
 STATS_FILE = STATS_DIR / "stats.json"
 STATS_RETENTION_DAYS = max(30, int(os.getenv("BITNET_STATS_RETENTION_DAYS", "400")))
@@ -502,6 +507,16 @@ def _build_command(prompt: str, options: RuntimeOptions) -> list[str]:
         str(options.ctx_size),
         "-temp",
         str(options.temperature),
+        "--repeat-penalty",
+        str(DEFAULT_REPEAT_PENALTY),
+        "--repeat-last-n",
+        str(DEFAULT_REPEAT_LAST_N),
+        "--top-k",
+        str(DEFAULT_TOP_K),
+        "--top-p",
+        str(DEFAULT_TOP_P),
+        "--min-p",
+        str(DEFAULT_MIN_P),
     ]
     # Do not enable llama-cli conversation mode for API calls.
     # In this context it can switch to interactive behavior and wait on stdin.
@@ -530,10 +545,41 @@ def _first_sentence(text: str) -> str:
 def _format_prompt(prompt: str) -> str:
     user_prompt = prompt.strip()
     return (
-        "You are a helpful assistant. Reply directly and concisely.\\n"
+        "You are a helpful assistant. Reply directly and concisely. Avoid emoji spam, decorative symbols, and repetitive filler.\\n"
         f"User: {user_prompt}\\n"
         "Assistant:"
     )
+
+
+def _trim_low_signal_suffix(text: str) -> tuple[str, bool]:
+    parts = re.findall(r"\\s+|\\S+", text)
+    symbol_run = 0
+    repeated_run = 0
+    previous_normalized = None
+
+    for index, part in enumerate(parts):
+        if part.isspace():
+            continue
+
+        normalized = part.strip().lower()
+        has_alnum = any(ch.isalnum() for ch in part)
+
+        if has_alnum:
+            symbol_run = 0
+        else:
+            symbol_run += 1
+
+        if normalized and normalized == previous_normalized:
+            repeated_run += 1
+        else:
+            repeated_run = 1
+            previous_normalized = normalized
+
+        if symbol_run >= 10 or (not has_alnum and repeated_run >= 6):
+            trimmed = "".join(parts[:index]).rstrip()
+            return trimmed, True
+
+    return text, False
 
 
 def _is_runtime_noise_line(line: str) -> bool:
@@ -863,6 +909,7 @@ def stream_bitnet(prompt: str, options: RuntimeOptions, user_id: str, session_id
     generated_so_far = ""
     short_sent_len = 0
     short_prompt_complete = False
+    visible_response = ""
     stream_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     raw_output_parts: list[str] = []
     assistant_text_parts: list[str] = []
@@ -913,6 +960,7 @@ def stream_bitnet(prompt: str, options: RuntimeOptions, user_id: str, session_id
 
             if short_prompt_mode:
                 generated_so_far += emit_text
+                generated_so_far, low_signal_detected = _trim_low_signal_suffix(generated_so_far)
                 sentence = _first_sentence(generated_so_far)
                 if sentence and not short_prompt_complete:
                     delta = sentence[short_sent_len:]
@@ -922,9 +970,24 @@ def stream_bitnet(prompt: str, options: RuntimeOptions, user_id: str, session_id
                         short_sent_len = len(sentence)
                 if re.search(r"[.!?](?:\s|$)", sentence or ""):
                     short_prompt_complete = True
+                if low_signal_detected:
+                    stopped_early = True
+                    if process.poll() is None:
+                        process.terminate()
+                    break
             else:
-                assistant_text_parts.append(emit_text)
-                yield _sse_event(emit_text)
+                candidate_response = visible_response + emit_text
+                trimmed_response, low_signal_detected = _trim_low_signal_suffix(candidate_response)
+                delta = trimmed_response[len(visible_response):] if trimmed_response.startswith(visible_response) else emit_text
+                if delta:
+                    assistant_text_parts.append(delta)
+                    yield _sse_event(delta)
+                    visible_response = trimmed_response
+                if low_signal_detected:
+                    stopped_early = True
+                    if process.poll() is None:
+                        process.terminate()
+                    break
 
         tail_chunk = _clean_generation_chunk(stream_decoder.decode(b"", final=True))
         if tail_chunk:
@@ -933,8 +996,12 @@ def stream_bitnet(prompt: str, options: RuntimeOptions, user_id: str, session_id
         if pending and generation_started and not short_prompt_mode:
             pending = _strip_runtime_noise_from_text(pending)
             if pending.strip():
-                assistant_text_parts.append(pending)
-                yield _sse_event(pending)
+                candidate_response = visible_response + pending
+                trimmed_response, _ = _trim_low_signal_suffix(candidate_response)
+                delta = trimmed_response[len(visible_response):] if trimmed_response.startswith(visible_response) else pending
+                if delta:
+                    assistant_text_parts.append(delta)
+                    yield _sse_event(delta)
 
         return_code = process.wait()
         if return_code != 0 and not stopped_early:
