@@ -23,6 +23,8 @@ services:
     container_name: bitnet-frontend
     volumes:
       - ./index.html:/usr/share/nginx/html/index.html:ro
+      - ./styles.css:/usr/share/nginx/html/styles.css:ro
+      - ./app.js:/usr/share/nginx/html/app.js:ro
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
       - "${UI_BIND_HOST:-0.0.0.0}:${UI_PORT:-8080}:80"
