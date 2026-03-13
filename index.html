@@ -134,18 +134,22 @@
     }
 
     .topbar {
+      position: relative;
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: center;
       gap: 12px;
       border-bottom: 1px solid var(--line);
-      padding: 14px 16px;
+      padding: 16px 92px;
+      min-height: 92px;
     }
 
     .title-wrap {
       display: flex;
       flex-direction: column;
       gap: 2px;
+      align-items: center;
+      text-align: center;
     }
 
     .title {
@@ -174,6 +178,52 @@
       color: var(--muted);
     }
 
+    .edge-tab {
+      position: fixed;
+      top: 50vh;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 58px;
+      height: 112px;
+      padding: 0;
+      border: 1px solid var(--line);
+      color: #082131;
+      transform: translateY(-50%);
+      box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28);
+      z-index: 20;
+    }
+
+    .edge-tab:hover {
+      transform: translateY(-50%) scale(1.02);
+    }
+
+    .edge-tab svg {
+      width: 24px;
+      height: 24px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .edge-tab[hidden] {
+      display: none;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     .toolbar {
       display: flex;
       gap: 8px;
@@ -181,15 +231,19 @@
     }
 
     #options-btn {
+      left: 0;
+      border-left: 0;
+      border-radius: 0 999px 999px 0;
       background: linear-gradient(120deg, #6ed4f3, #5cd4ab);
       color: #092232;
-      min-height: 36px;
     }
 
     #stats-btn {
+      right: 0;
+      border-right: 0;
+      border-radius: 999px 0 0 999px;
       background: linear-gradient(120deg, #f0da6b, #e98f57);
       color: #11202e;
-      min-height: 36px;
     }
 
     .settings-form {
@@ -361,6 +415,16 @@
       button {
         height: 42px;
       }
+
+      .topbar {
+        padding: 16px 72px;
+        min-height: 86px;
+      }
+
+      .edge-tab {
+        width: 52px;
+        height: 92px;
+      }
     }
   </style>
 </head>
@@ -418,10 +482,6 @@
           <div class="subtitle">VERY VERSATILE PERFORMANCE PLATFORM</div>
           <div id="status" class="status">idle</div>
         </div>
-        <div class="toolbar">
-          <button id="options-btn" type="button">Options</button>
-          <button id="stats-btn" type="button" hidden>Stats</button>
-        </div>
       </header>
 
       <section id="chat" aria-live="polite"></section>
@@ -440,6 +500,24 @@
       <div id="stats-body" class="sidebar-body"></div>
     </aside>
   </main>
+
+  <button id="options-btn" class="edge-tab" type="button" aria-label="Options" title="Options">
+    <span class="sr-only">Options</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10.24 3.41 9.6 5.32a7.15 7.15 0 0 0-1.56.65L6.2 5.12 4.62 6.7l.85 1.84c-.27.49-.49 1.01-.64 1.56l-1.92.64v2.24l1.92.64c.15.55.37 1.07.64 1.56l-.85 1.84 1.58 1.58 1.84-.85c.49.27 1.01.49 1.56.64l.64 1.92h2.24l.64-1.92c.55-.15 1.07-.37 1.56-.64l1.84.85 1.58-1.58-.85-1.84c.27-.49.49-1.01.64-1.56l1.92-.64V10.6l-1.92-.64a7.15 7.15 0 0 0-.64-1.56l.85-1.84-1.58-1.58-1.84.85a7.15 7.15 0 0 0-1.56-.64l-.64-1.91z"></path>
+      <circle cx="12" cy="12" r="3.15"></circle>
+    </svg>
+  </button>
+
+  <button id="stats-btn" class="edge-tab" type="button" aria-label="Stats" title="Stats" hidden>
+    <span class="sr-only">Stats</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 19.5h16"></path>
+      <path d="M7 16V11"></path>
+      <path d="M12 16V7"></path>
+      <path d="M17 16V4.5"></path>
+    </svg>
+  </button>
 
   <script>
     const shell = document.getElementById('shell');
