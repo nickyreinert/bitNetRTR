@@ -258,7 +258,7 @@ body {
 
 .toggle {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   color: var(--muted);
   font-size: 0.75rem;
@@ -269,6 +269,23 @@ body {
   width: auto;
   margin: 0;
   min-height: auto;
+  transform: translateY(2px);
+}
+
+.toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toggle-label {
+  color: var(--text);
+  font-size: 0.78rem;
+}
+
+.toggle-help {
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 #chat {

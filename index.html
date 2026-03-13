@@ -23,9 +23,12 @@
             <input id="api-key" type="password" placeholder="X-API-KEY" autocomplete="off" />
           </label>
 
-          <label class="toggle">
+          <label class="toggle" for="use-proxy">
             <input id="use-proxy" type="checkbox" />
-            Use /api proxy
+            <span class="toggle-copy">
+              <span class="toggle-label">Route API through web server</span>
+              <span class="toggle-help">Recommended. Sends requests to /api via the UI server instead of calling port 8000 directly.</span>
+            </span>
           </label>
 
           <label class="field">

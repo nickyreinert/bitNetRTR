@@ -333,6 +333,17 @@ def _clean_generation_line(line: str) -> str:
 
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+_INLINE_RUNTIME_NOISE_RE = re.compile(
+    r"(?:^|\n)\s*(?:"
+    r"llama_perf_[^\n]*|"
+    r"llm_perf_[^\n]*|"
+    r"sampling time\s*=\s*[^\n]*|"
+    r"prompt eval time\s*=\s*[^\n]*|"
+    r"eval time\s*=\s*[^\n]*|"
+    r"total time\s*=\s*[^\n]*"
+    r")",
+    flags=re.IGNORECASE,
+)
 
 
 def _clean_generation_chunk(chunk: str) -> str:
@@ -340,6 +351,15 @@ def _clean_generation_chunk(chunk: str) -> str:
     for marker in ("<|im_sep|>", "<|im_start|>", "<|im_end|>"):
         cleaned = cleaned.replace(marker, "")
     return cleaned.replace("\r", "")
+
+
+def _strip_runtime_noise_from_text(text: str) -> str:
+    # Runtime diagnostics (e.g. llama_perf_context_print) can be interleaved
+    # in streamed output and should never be shown as assistant content.
+    cleaned = _INLINE_RUNTIME_NOISE_RE.sub("", text)
+    cleaned = cleaned.replace(")llama_perf_", ")\nllama_perf_")
+    cleaned = _INLINE_RUNTIME_NOISE_RE.sub("", cleaned)
+    return cleaned
 
 
 def _verify_api_key(x_api_key: str | None) -> None:
@@ -539,6 +559,9 @@ def stream_bitnet(prompt: str, options: RuntimeOptions) -> Iterable[str]:
             emit_text = emit_text.replace("You are a helpful assistant.", "")
             emit_text = emit_text.replace("User:", "")
             emit_text = emit_text.replace("Assistant:", "")
+            emit_text = _strip_runtime_noise_from_text(emit_text)
+            if not emit_text.strip():
+                continue
 
             if short_prompt_mode:
                 generated_so_far += emit_text
@@ -561,7 +584,9 @@ def stream_bitnet(prompt: str, options: RuntimeOptions) -> Iterable[str]:
             pending += tail_chunk
 
         if pending and generation_started and not short_prompt_mode:
-            yield _sse_event(pending)
+            pending = _strip_runtime_noise_from_text(pending)
+            if pending.strip():
+                yield _sse_event(pending)
 
         return_code = process.wait()
         if return_code != 0 and not stopped_early:

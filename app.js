@@ -29,7 +29,8 @@ let statsTimer = null;
 let waitingTimer = null;
 
 apiKeyInput.value = localStorage.getItem('bitnet_api_key') || 'your-secret-key-here';
-useProxyInput.checked = localStorage.getItem('bitnet_use_proxy') === 'true';
+const savedUseProxy = localStorage.getItem('bitnet_use_proxy');
+useProxyInput.checked = savedUseProxy === null ? true : savedUseProxy === 'true';
 
 function getApiBase() {
   if (useProxyInput.checked) {
