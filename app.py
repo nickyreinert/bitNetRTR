@@ -554,8 +554,10 @@ def _format_prompt(prompt: str) -> str:
 def _trim_low_signal_suffix(text: str) -> tuple[str, bool]:
     parts = re.findall(r"\\s+|\\S+", text)
     symbol_run = 0
+    symbol_run_start = None
     repeated_run = 0
     previous_normalized = None
+    saw_terminal_punctuation = False
 
     for index, part in enumerate(parts):
         if part.isspace():
@@ -563,10 +565,15 @@ def _trim_low_signal_suffix(text: str) -> tuple[str, bool]:
 
         normalized = part.strip().lower()
         has_alnum = any(ch.isalnum() for ch in part)
+        if any(ch in ".!?" for ch in part):
+            saw_terminal_punctuation = True
 
         if has_alnum:
             symbol_run = 0
+            symbol_run_start = None
         else:
+            if symbol_run == 0:
+                symbol_run_start = index
             symbol_run += 1
 
         if normalized and normalized == previous_normalized:
@@ -575,8 +582,12 @@ def _trim_low_signal_suffix(text: str) -> tuple[str, bool]:
             repeated_run = 1
             previous_normalized = normalized
 
-        if symbol_run >= 10 or (not has_alnum and repeated_run >= 6):
-            trimmed = "".join(parts[:index]).rstrip()
+        if symbol_run_start is not None and (
+            symbol_run >= 10
+            or (saw_terminal_punctuation and symbol_run >= 3)
+            or (not has_alnum and repeated_run >= 6)
+        ):
+            trimmed = "".join(parts[:symbol_run_start]).rstrip()
             return trimmed, True
 
     return text, False
