@@ -4,6 +4,8 @@ import re
 import shutil
 import subprocess
 import time
+import csv
+import io
 import codecs
 import hashlib
 import json
@@ -300,6 +302,33 @@ def _runtime_bucket(samples: list[dict[str, Any]], label: str, start_ts: int) ->
     }
 
 
+def _hardware_signature(snapshot: dict[str, Any]) -> str:
+    cpu = snapshot.get("cpu") or {}
+    memory = snapshot.get("memory") or {}
+    gpus = snapshot.get("gpus") or []
+    signature_payload = {
+        "cpu": {
+            "model": cpu.get("model"),
+            "cores_logical": cpu.get("cores_logical"),
+            "architecture": cpu.get("architecture"),
+        },
+        "memory": {
+            "kind": memory.get("kind"),
+            "total_bytes": memory.get("total_bytes"),
+        },
+        "gpus": [
+            {
+                "index": gpu.get("index"),
+                "name": gpu.get("name"),
+                "memory_total_mb": gpu.get("memory_total_mb"),
+            }
+            for gpu in gpus
+        ],
+    }
+    raw = json.dumps(signature_payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
 def _group_by_period(records: list[dict[str, Any]], period: str, builder) -> list[dict[str, Any]]:
     buckets: dict[int, list[dict[str, Any]]] = {}
     for record in records:
@@ -323,7 +352,14 @@ class StatsStore:
         self.data = self._load()
 
     def _default_data(self) -> dict[str, Any]:
-        return {"runtime_samples": [], "user_events": {}}
+        return {
+            "runtime_samples": [],
+            "user_events": {},
+            "hardware_inventory": {
+                "latest": None,
+                "records": [],
+            },
+        }
 
     def _load(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -336,6 +372,12 @@ class StatsStore:
             return self._default_data()
         loaded.setdefault("runtime_samples", [])
         loaded.setdefault("user_events", {})
+        hardware_inventory = loaded.setdefault("hardware_inventory", {})
+        if not isinstance(hardware_inventory, dict):
+            hardware_inventory = {"latest": None, "records": []}
+            loaded["hardware_inventory"] = hardware_inventory
+        hardware_inventory.setdefault("latest", None)
+        hardware_inventory.setdefault("records", [])
         return loaded
 
     def _save_locked(self) -> None:
@@ -376,6 +418,51 @@ class StatsStore:
             user_events.append(event)
             self._prune_locked(now_ts)
             self._save_locked()
+
+    def record_hardware_snapshot(self, snapshot: dict[str, Any]) -> None:
+        now_ts = _safe_int(snapshot.get("timestamp")) or int(time.time())
+        with self.lock:
+            inventory = self.data.setdefault("hardware_inventory", {"latest": None, "records": []})
+            records = inventory.setdefault("records", [])
+            signature = str(snapshot.get("signature") or "")
+            if not signature:
+                signature = _hardware_signature(snapshot)
+
+            existing: dict[str, Any] | None = None
+            for record in records:
+                if str(record.get("signature") or "") == signature:
+                    existing = record
+                    break
+
+            if existing is None:
+                existing = {
+                    **snapshot,
+                    "signature": signature,
+                    "first_seen_ts": now_ts,
+                    "last_seen_ts": now_ts,
+                    "seen_count": 1,
+                }
+                records.append(existing)
+            else:
+                existing["timestamp"] = now_ts
+                existing["last_seen_ts"] = now_ts
+                existing["seen_count"] = int(existing.get("seen_count") or 0) + 1
+                existing["cpu"] = snapshot.get("cpu")
+                existing["memory"] = snapshot.get("memory")
+                existing["gpus"] = snapshot.get("gpus")
+                existing["host"] = snapshot.get("host")
+
+            # Keep history bounded but durable for benchmark provenance.
+            if len(records) > 128:
+                records.sort(key=lambda item: _safe_int(item.get("last_seen_ts")) or 0, reverse=True)
+                del records[128:]
+
+            inventory["latest"] = existing
+            self._save_locked()
+
+    def export_raw(self) -> dict[str, Any]:
+        with self.lock:
+            return json.loads(json.dumps(self.data, ensure_ascii=True))
 
     def build_runtime_history(self, now_ts: int) -> dict[str, Any]:
         with self.lock:
@@ -443,6 +530,10 @@ def _start_runtime_sampler() -> None:
             time.sleep(STATS_SAMPLE_INTERVAL_SECONDS)
 
     threading.Thread(target=_sampler, name="bitnet-runtime-stats", daemon=True).start()
+
+
+if STATS_ENABLED:
+    _start_runtime_sampler()
 
 
 def _llama_cli_path(bitnet_repo_abs: str) -> str:
@@ -848,6 +939,16 @@ def _read_memory_stats() -> dict | None:
     }
 
 
+def _read_cpu_model() -> str | None:
+    try:
+        for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
+            if line.lower().startswith("model name") and ":" in line:
+                return line.split(":", 1)[1].strip()
+    except Exception:
+        return None
+    return None
+
+
 def _read_gpu_stats() -> list[dict]:
     cmd = [
         "nvidia-smi",
@@ -882,7 +983,40 @@ def _read_gpu_stats() -> list[dict]:
     return rows
 
 
-    _start_runtime_sampler()
+def _build_hardware_snapshot(
+    memory: dict[str, Any] | None = None,
+    gpus: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    memory = memory if memory is not None else _read_memory_stats()
+    gpus = gpus if gpus is not None else _read_gpu_stats()
+    snapshot = {
+        "timestamp": int(time.time()),
+        "host": {
+            "hostname": platform.node() or None,
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+        },
+        "cpu": {
+            "model": _read_cpu_model(),
+            "cores_logical": os.cpu_count(),
+            "architecture": platform.machine(),
+        },
+        "memory": {
+            "kind": "system-ram",
+            "total_bytes": memory.get("total_bytes") if memory else None,
+            "total_gb": _round_metric((memory.get("total_bytes") or 0) / (1024 ** 3)) if memory else None,
+        },
+        "gpus": [
+            {
+                "index": gpu.get("index"),
+                "name": gpu.get("name"),
+                "memory_total_mb": gpu.get("memory_total_mb"),
+            }
+            for gpu in gpus
+        ],
+    }
+    snapshot["signature"] = _hardware_signature(snapshot)
+    return snapshot
 
 
 def stream_bitnet(prompt: str, options: RuntimeOptions, user_id: str, session_id: str) -> Iterable[str]:
@@ -1111,19 +1245,215 @@ async def runtime_stats(
     STATS_STORE.record_runtime_sample(_runtime_history_sample())
     current_memory = _read_memory_stats()
     current_gpus = _read_gpu_stats()
+    STATS_STORE.record_hardware_snapshot(_build_hardware_snapshot(current_memory, current_gpus))
+    exported = STATS_STORE.export_raw()
     return {
         "timestamp": now_ts,
         "runtime": {
             "cpu": {
                 "usage_percent": _read_cpu_percent(),
                 "cores": os.cpu_count(),
+                "model": _read_cpu_model(),
+                "architecture": platform.machine(),
             },
             "memory": current_memory,
             "gpus": current_gpus,
         },
+        "hardware": exported.get("hardware_inventory", {}),
         "runtime_history": STATS_STORE.build_runtime_history(now_ts),
         "usage": STATS_STORE.build_user_usage(user_id, now_ts),
     }
+
+
+@app.get("/stats/export")
+async def runtime_stats_export(
+    x_api_key: str | None = Header(default=None),
+    x_user_id: str | None = Header(default=None),
+    format: str = Query(default="json"),
+) -> Any:
+    _verify_api_key(x_api_key)
+    if not STATS_ENABLED:
+        raise HTTPException(status_code=404, detail="Stats are disabled")
+    assert x_api_key is not None
+    user_id = _resolve_user_id(x_api_key, x_user_id)
+    now_ts = int(time.time())
+    current_memory = _read_memory_stats()
+    current_gpus = _read_gpu_stats()
+    STATS_STORE.record_runtime_sample(_runtime_history_sample())
+    STATS_STORE.record_hardware_snapshot(_build_hardware_snapshot(current_memory, current_gpus))
+
+    raw = STATS_STORE.export_raw()
+    payload = {
+        "meta": {
+            "exported_at": now_ts,
+            "exported_at_iso": datetime.fromtimestamp(now_ts, tz=timezone.utc).isoformat(),
+            "retention_days": STATS_RETENTION_DAYS,
+            "sample_interval_seconds": STATS_SAMPLE_INTERVAL_SECONDS,
+            "scope": "all-recorded-data",
+            "requested_user": user_id,
+        },
+        "current_runtime": {
+            "cpu": {
+                "usage_percent": _read_cpu_percent(),
+                "cores": os.cpu_count(),
+                "model": _read_cpu_model(),
+                "architecture": platform.machine(),
+            },
+            "memory": current_memory,
+            "gpus": current_gpus,
+        },
+        "hardware_inventory": raw.get("hardware_inventory", {}),
+        "runtime_samples": raw.get("runtime_samples", []),
+        "user_events": raw.get("user_events", {}),
+        "runtime_history": STATS_STORE.build_runtime_history(now_ts),
+        "requested_user_usage": STATS_STORE.build_user_usage(user_id, now_ts),
+    }
+
+    format_key = (format or "json").strip().lower()
+    if format_key == "json":
+        return payload
+
+    if format_key != "csv":
+        raise HTTPException(status_code=422, detail="Unsupported export format. Use 'json' or 'csv'.")
+
+    csv_buffer = io.StringIO()
+    writer = csv.writer(csv_buffer)
+    writer.writerow([
+        "section",
+        "key",
+        "timestamp",
+        "user_id",
+        "session_id",
+        "label",
+        "metric",
+        "value",
+        "json",
+    ])
+
+    def _write_row(
+        section: str,
+        key: str = "",
+        timestamp: int | None = None,
+        user_id_value: str = "",
+        session_id: str = "",
+        label: str = "",
+        metric: str = "",
+        value: Any = "",
+        obj: Any = None,
+    ) -> None:
+        writer.writerow(
+            [
+                section,
+                key,
+                timestamp if timestamp is not None else "",
+                user_id_value,
+                session_id,
+                label,
+                metric,
+                value if value is not None else "",
+                json.dumps(obj, ensure_ascii=True, separators=(",", ":")) if obj is not None else "",
+            ]
+        )
+
+    for key, value in payload.get("meta", {}).items():
+        _write_row("meta", key=key, metric=key, value=value)
+
+    current_runtime = payload.get("current_runtime", {})
+    for key, value in (current_runtime.get("cpu") or {}).items():
+        _write_row("current_runtime_cpu", key="cpu", metric=key, value=value)
+    for key, value in (current_runtime.get("memory") or {}).items():
+        _write_row("current_runtime_memory", key="memory", metric=key, value=value)
+    for gpu in current_runtime.get("gpus") or []:
+        gpu_idx = str(gpu.get("index", ""))
+        for key, value in gpu.items():
+            _write_row("current_runtime_gpu", key=gpu_idx, metric=key, value=value)
+
+    hardware_inventory = payload.get("hardware_inventory", {})
+    latest_hw = hardware_inventory.get("latest")
+    if latest_hw:
+        _write_row(
+            "hardware_latest",
+            key=str(latest_hw.get("signature") or ""),
+            timestamp=_safe_int(latest_hw.get("timestamp")),
+            obj=latest_hw,
+        )
+    for record in hardware_inventory.get("records") or []:
+        _write_row(
+            "hardware_record",
+            key=str(record.get("signature") or ""),
+            timestamp=_safe_int(record.get("timestamp")),
+            obj=record,
+        )
+
+    for sample in payload.get("runtime_samples") or []:
+        _write_row(
+            "runtime_sample",
+            timestamp=_safe_int(sample.get("timestamp")),
+            metric="cpu_usage_percent",
+            value=sample.get("cpu_usage_percent"),
+            obj=sample,
+        )
+
+    for event_user_id, events in (payload.get("user_events") or {}).items():
+        for event in events:
+            _write_row(
+                "user_event",
+                timestamp=_safe_int(event.get("timestamp")),
+                user_id_value=event_user_id,
+                session_id=str(event.get("session_id") or ""),
+                label=str(event.get("model") or ""),
+                metric="total_tokens",
+                value=event.get("total_tokens"),
+                obj=event,
+            )
+
+    runtime_history = payload.get("runtime_history") or {}
+    for period in ("last_hour", "daily", "weekly", "monthly"):
+        for row in runtime_history.get(period) or []:
+            _write_row(
+                "runtime_history",
+                key=period,
+                timestamp=_safe_int(row.get("start_ts") or row.get("timestamp")),
+                label=str(row.get("label") or ""),
+                metric="samples",
+                value=row.get("samples"),
+                obj=row,
+            )
+
+    user_usage = payload.get("requested_user_usage") or {}
+    totals = user_usage.get("totals") or {}
+    for key, value in totals.items():
+        _write_row("requested_user_usage_totals", key="totals", metric=key, value=value)
+    latest_chat = user_usage.get("latest_chat")
+    if latest_chat:
+        _write_row(
+            "requested_user_usage_latest_chat",
+            timestamp=_safe_int(latest_chat.get("timestamp")),
+            session_id=str(latest_chat.get("session_id") or ""),
+            label=str(latest_chat.get("model") or ""),
+            metric="total_tokens",
+            value=latest_chat.get("total_tokens"),
+            obj=latest_chat,
+        )
+    for period in ("last_hour", "daily", "weekly", "monthly"):
+        for row in user_usage.get(period) or []:
+            _write_row(
+                "requested_user_usage_period",
+                key=period,
+                timestamp=_safe_int(row.get("start_ts")),
+                label=str(row.get("label") or ""),
+                metric="total_tokens",
+                value=row.get("total_tokens"),
+                obj=row,
+            )
+
+    csv_text = csv_buffer.getvalue()
+    filename = f"bitnet-stats-export-{now_ts}.csv"
+    return StreamingResponse(
+        iter([csv_text]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/chat")

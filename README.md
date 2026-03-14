@@ -2,6 +2,22 @@
 
 This is a ready-to-run implementation of Microsoft's [bitNet](https://github.com/microsoft/bitNet) framework. It allows you to run bitnet.cpp - an inference framework for 1-bit LLMs - on weak hardware. 
 
+## Overview
+
+- OPEN VVPP wraps around bitNet and provides a web interface for managing models, conversations, and settings.
+
+![alt text](image.png)
+
+- it's "protected" by an API key, but as the focus is to run it locally on your NAS or PC, the API key is the only serious security measure here - no user accounts, no permissions, no authentication, no encryption, no rate limits, no nothing to hardend it
+
+![alt text](image-1.png)
+
+- you also get a couple of statistical insights about your usage, and the option to share them anonymously with the community
+
+![alt text](image-2.png)
+
+![alt text](image-3.png)
+
 ## Quick start
 
 Run:
@@ -22,27 +38,6 @@ What this does:
 ## After install
 
 - check `config.yaml` for configuration options, you may add and configure models there
-- run `bitNetRTR.sh` to start the server
+- run `bitNetRTR.sh` to start and maintain the server
 - in the wrapper menu, use `Download model(s) (container)` to fetch selected supported models on demand
 
-### Installer options
-
-Use a different install directory:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/nickyreinert/bitNetRTR/main/install.sh | bash -s -- --install-dir /your/path/bitNetRTR
-```
-
-Use a different branch or repo:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/nickyreinert/bitNetRTR/main/install.sh | bash -s -- --repo https://github.com/nickyreinert/bitNetRTR.git --branch main
-```
-
-Skip dependency installation:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/nickyreinert/bitNetRTR/main/install.sh | bash -s -- --skip-install-deps
-```
-
-Note: the installer now always skips host dependency installation. The flag is accepted for backwards compatibility.

@@ -454,22 +454,24 @@ write_runtime_compose() {
 	local runtime_path="${PROJECT_DIR}/docker-compose.runtime.yml"
 
 	if [[ "${COMPUTE_MODE}" == "gpu" ]]; then
-		cat >"${runtime_path}" <<'EOF'
-services:
-  bitnet-api:
-		gpus:
-			- all
-    environment:
-      NVIDIA_VISIBLE_DEVICES: all
-      NVIDIA_DRIVER_CAPABILITIES: compute,utility
-EOF
+		{
+			printf '%s\n' 'services:'
+			printf '%s\n' '  bitnet-api:'
+			printf '%s\n' '    gpus:'
+			printf '%s\n' '      - driver: nvidia'
+			printf '%s\n' '        count: all'
+			printf '%s\n' '        capabilities: [gpu]'
+			printf '%s\n' '    environment:'
+			printf '%s\n' '      NVIDIA_VISIBLE_DEVICES: all'
+			printf '%s\n' '      NVIDIA_DRIVER_CAPABILITIES: compute,utility'
+		} >"${runtime_path}"
 	else
-		cat >"${runtime_path}" <<'EOF'
-services:
-  bitnet-api:
-    environment:
-      NVIDIA_VISIBLE_DEVICES: ""
-EOF
+		{
+			printf '%s\n' 'services:'
+			printf '%s\n' '  bitnet-api:'
+			printf '%s\n' '    environment:'
+			printf '%s\n' '      NVIDIA_VISIBLE_DEVICES: ""'
+		} >"${runtime_path}"
 	fi
 
 	info "Wrote ${runtime_path}"

@@ -159,6 +159,13 @@ function formatMetric(value, suffix = '') {
   return `${Number(value).toFixed(2)}${suffix}`;
 }
 
+function formatBytes(value) {
+  if (value == null || Number.isNaN(Number(value))) return 'n/a';
+  const bytes = Number(value);
+  const gib = bytes / (1024 ** 3);
+  return `${gib.toFixed(2)} GiB`;
+}
+
 function formatCompactDate(timestamp) {
   if (!timestamp) return 'n/a';
   return new Date(timestamp * 1000).toLocaleString([], {
@@ -172,6 +179,82 @@ function formatCompactDate(timestamp) {
 function summarizeRange(range, suffix = '') {
   if (!range || range.avg == null) return 'n/a';
   return `avg ${formatMetric(range.avg, suffix)} | min ${formatMetric(range.min, suffix)} | max ${formatMetric(range.max, suffix)}`;
+}
+
+function isFiniteNumber(value) {
+  return Number.isFinite(Number(value));
+}
+
+function renderLineChart(title, labels, seriesList) {
+  const cleanedSeries = (seriesList || []).map((series) => ({
+    name: series.name,
+    color: series.color,
+    values: (series.values || []).map((value) => (isFiniteNumber(value) ? Number(value) : null))
+  }));
+  const allValues = cleanedSeries.flatMap((series) => series.values).filter((value) => value != null);
+
+  if (!allValues.length || !labels || !labels.length) {
+    return `<div class="stats-chart-wrap"><div class="stats-chart-empty">No chart data yet.</div></div>`;
+  }
+
+  const width = 640;
+  const height = 152;
+  const pad = 16;
+  let minVal = Math.min(...allValues);
+  let maxVal = Math.max(...allValues);
+  if (minVal === maxVal) {
+    minVal -= 1;
+    maxVal += 1;
+  }
+
+  const pointsForSeries = (values) => {
+    const n = values.length;
+    if (!n) return '';
+    return values
+      .map((value, index) => {
+        if (value == null) return null;
+        const x = n <= 1 ? width / 2 : pad + (index * (width - pad * 2)) / (n - 1);
+        const y = pad + ((maxVal - value) * (height - pad * 2)) / (maxVal - minVal);
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .filter(Boolean)
+      .join(' ');
+  };
+
+  const chartLines = cleanedSeries
+    .map((series) => {
+      const points = pointsForSeries(series.values);
+      if (!points) return '';
+      return `<polyline class="stats-chart-line" points="${points}" stroke="${series.color}" />`;
+    })
+    .join('');
+
+  const legend = cleanedSeries
+    .filter((series) => series.values.some((value) => value != null))
+    .map((series) => `<span class="stats-chart-legend-item"><i style="--legend-color: ${series.color}"></i>${escapeHtml(series.name)}</span>`)
+    .join('');
+
+  const firstLabel = labels[0] || '';
+  const lastLabel = labels[labels.length - 1] || '';
+
+  return `
+    <div class="stats-chart-wrap" aria-label="${escapeHtml(title)} chart">
+      <div class="stats-chart-head">
+        <span>${escapeHtml(title)}</span>
+        <span>${formatMetric(minVal)} to ${formatMetric(maxVal)}</span>
+      </div>
+      <svg class="stats-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img">
+        <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" class="stats-chart-axis" />
+        <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" class="stats-chart-axis" />
+        ${chartLines}
+      </svg>
+      <div class="stats-chart-labels">
+        <span>${escapeHtml(firstLabel)}</span>
+        <span>${escapeHtml(lastLabel)}</span>
+      </div>
+      <div class="stats-chart-legend">${legend}</div>
+    </div>
+  `;
 }
 
 function stripAssistantNoise(text) {
@@ -376,6 +459,12 @@ function renderUsageTable(title, rows) {
     return `<section class="stats-section"><h3>${escapeHtml(title)}</h3><div class="stats-card">No data yet.</div></section>`;
   }
 
+  const chartRows = rows.slice(0, 12).reverse();
+  const chartHtml = renderLineChart('Messages / Tokens Trend', chartRows.map((row) => row.label), [
+    { name: 'Messages', color: '#2ec293', values: chartRows.map((row) => row.messages) },
+    { name: 'Tokens', color: '#4bc2ff', values: chartRows.map((row) => row.total_tokens) }
+  ]);
+
   const body = rows.slice(0, 12).map((row) => `
     <tr>
       <td>${escapeHtml(row.label)}</td>
@@ -390,6 +479,7 @@ function renderUsageTable(title, rows) {
   return `
     <section class="stats-section">
       <h3>${escapeHtml(title)}</h3>
+      ${chartHtml}
       <div class="stats-table-wrap">
         <table class="stats-table">
           <thead>
@@ -406,6 +496,14 @@ function renderRuntimeTable(title, rows) {
   if (!rows || !rows.length) {
     return `<section class="stats-section"><h3>${escapeHtml(title)}</h3><div class="stats-card">No runtime history yet.</div></section>`;
   }
+
+  const chartRows = rows.slice(0, 12).reverse();
+  const chartHtml = renderLineChart('CPU / Mem / GPU Trend (%)', chartRows.map((row) => row.label), [
+    { name: 'CPU avg', color: '#4bc2ff', values: chartRows.map((row) => row.cpu_usage_percent?.avg) },
+    { name: 'Mem avg', color: '#2ec293', values: chartRows.map((row) => row.memory_used_percent?.avg) },
+    { name: 'GPU avg', color: '#f6c453', values: chartRows.map((row) => row.gpu_utilization_percent?.avg) }
+  ]);
+
   const body = rows.slice(0, 12).map((row) => `
     <tr>
       <td>${escapeHtml(row.label)}</td>
@@ -417,6 +515,7 @@ function renderRuntimeTable(title, rows) {
   return `
     <section class="stats-section">
       <h3>${escapeHtml(title)}</h3>
+      ${chartHtml}
       <div class="stats-table-wrap">
         <table class="stats-table">
           <thead>
@@ -433,6 +532,14 @@ function renderRuntimeSampleTable(title, rows) {
   if (!rows || !rows.length) {
     return `<section class="stats-section"><h3>${escapeHtml(title)}</h3><div class="stats-card">No last-hour runtime samples yet.</div></section>`;
   }
+
+  const chartRows = rows.slice(0, 12).reverse();
+  const chartHtml = renderLineChart('Recent Runtime Samples (%)', chartRows.map((row) => formatCompactDate(row.timestamp)), [
+    { name: 'CPU', color: '#4bc2ff', values: chartRows.map((row) => row.cpu_usage_percent) },
+    { name: 'Memory', color: '#2ec293', values: chartRows.map((row) => row.memory_used_percent) },
+    { name: 'GPU', color: '#f6c453', values: chartRows.map((row) => row.gpu_utilization_percent) }
+  ]);
+
   const body = rows.slice(0, 12).map((row) => `
     <tr>
       <td>${escapeHtml(formatCompactDate(row.timestamp))}</td>
@@ -444,6 +551,7 @@ function renderRuntimeSampleTable(title, rows) {
   return `
     <section class="stats-section">
       <h3>${escapeHtml(title)}</h3>
+      ${chartHtml}
       <div class="stats-table-wrap">
         <table class="stats-table">
           <thead>
@@ -459,14 +567,25 @@ function renderRuntimeSampleTable(title, rows) {
 function renderStats(stats) {
   const runtime = stats.runtime || {};
   const usage = stats.usage || {};
+  const hardware = stats.hardware || {};
+  const latestHardware = hardware.latest || {};
   const latest = usage.latest_chat;
   const gpuCards = (runtime.gpus || []).map((gpu) => {
     return `<div class="stats-card"><strong>GPU ${escapeHtml(gpu.index)}: ${escapeHtml(gpu.name)}</strong><br/>Util: ${formatMetric(gpu.utilization_percent, '%')}<br/>Mem: ${formatNumber(gpu.memory_used_mb)} / ${formatNumber(gpu.memory_total_mb)} MB<br/>Temp: ${formatMetric(gpu.temperature_c, ' C')}</div>`;
   }).join('');
+
+  const cpuModel = runtime.cpu?.model || latestHardware.cpu?.model || 'n/a';
+  const memoryKind = latestHardware.memory?.kind || 'system-ram';
+  const memoryTotal = runtime.memory?.total_bytes ?? latestHardware.memory?.total_bytes;
   const cpuUsage = runtime.cpu && runtime.cpu.usage_percent != null ? `${runtime.cpu.usage_percent}%` : 'warming up';
   const memory = runtime.memory
     ? `${runtime.memory.used_percent}% (${Math.round(runtime.memory.used_bytes / (1024 * 1024))} / ${Math.round(runtime.memory.total_bytes / (1024 * 1024))} MB)`
     : 'n/a';
+
+  const gpuInventory = latestHardware.gpus || [];
+  const fallbackGpuCard = gpuInventory.length
+    ? `<div class="stats-card"><strong>GPU Inventory</strong><br/>${gpuInventory.map((gpu) => `${escapeHtml(gpu.name || `GPU ${gpu.index}`)} (${formatNumber(gpu.memory_total_mb)} MB)`).join('<br/>')}</div>`
+    : '<div class="stats-card"><strong>GPU</strong><br/>No NVIDIA GPU stats available.</div>';
 
   const latestCard = latest
     ? `<div class="stats-card stats-card-wide"><strong>Latest Reply</strong><br/>${escapeHtml(formatCompactDate(latest.timestamp))}<br/>Model: ${escapeHtml(latest.model || 'n/a')}<br/>Prompt: ${formatNumber(latest.prompt_tokens)} tok | Reply: ${formatNumber(latest.completion_tokens)} tok | Total: ${formatNumber(latest.total_tokens)} tok<br/>Latency: ${formatMetric(latest.total_time_ms, ' ms')}<br/>Prompt speed: ${formatMetric(latest.prompt_tokens_per_second)} tok/s | Reply speed: ${formatMetric(latest.eval_tokens_per_second)} tok/s | Sampling: ${formatMetric(latest.sampling_time_ms, ' ms')}</div>`
@@ -477,12 +596,12 @@ function renderStats(stats) {
     <section class="stats-section">
       <h3>Overview</h3>
       <div class="stats-grid">
-        <div class="stats-card"><strong>CPU</strong><br/>Usage: ${cpuUsage}<br/>Cores: ${runtime.cpu?.cores ?? 'n/a'}</div>
-        <div class="stats-card"><strong>Memory</strong><br/>Used: ${memory}</div>
+        <div class="stats-card"><strong>CPU</strong><br/>Usage: ${cpuUsage}<br/>Cores: ${runtime.cpu?.cores ?? latestHardware.cpu?.cores_logical ?? 'n/a'}<br/>Model: ${escapeHtml(cpuModel)}</div>
+        <div class="stats-card"><strong>Memory</strong><br/>Used: ${memory}<br/>Type: ${escapeHtml(memoryKind)}<br/>Total: ${formatBytes(memoryTotal)}</div>
         <div class="stats-card"><strong>User Totals</strong><br/>Sessions: ${formatNumber(totals.sessions)}<br/>Messages: ${formatNumber(totals.messages)}<br/>Tokens: ${formatNumber(totals.total_tokens)}</div>
         <div class="stats-card"><strong>Token Split</strong><br/>Prompt: ${formatNumber(totals.prompt_tokens)}<br/>Reply: ${formatNumber(totals.completion_tokens)}<br/>User: ${escapeHtml(usage.user_id || 'n/a')}</div>
         ${latestCard}
-        ${gpuCards || '<div class="stats-card"><strong>GPU</strong><br/>No NVIDIA GPU stats available.</div>'}
+        ${gpuCards || fallbackGpuCard}
       </div>
     </section>
     ${renderUsageTable('Last Hour Detail', usage.last_hour)}
@@ -493,7 +612,45 @@ function renderStats(stats) {
     ${renderRuntimeTable('Runtime Trend', stats.runtime_history?.daily || [])}
     ${renderRuntimeTable('Weekly Runtime', stats.runtime_history?.weekly || [])}
     ${renderRuntimeTable('Monthly Runtime', stats.runtime_history?.monthly || [])}
+    <section class="stats-section">
+      <button id="stats-download-btn" class="stats-download-btn" type="button">Download All Stats (CSV)</button>
+    </section>
   `;
+}
+
+async function downloadStatsExport() {
+  if (!frontendConfig || !frontendConfig.stats_enabled) return;
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey) {
+    setStatus('missing api key for export', true);
+    return;
+  }
+
+  const base = getApiBase();
+  try {
+    setStatus('exporting stats...');
+    const response = await fetch(`${base}${apiRoute('/stats/export')}?format=csv`, {
+      headers: statsHeaders(apiKey)
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const csvText = await response.text();
+    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const stamp = new Date().toISOString().replaceAll(':', '-');
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `bitnet-stats-export-${stamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setStatus('stats export downloaded');
+  } catch (error) {
+    setStatus(`export error: ${error.message}`, true);
+  }
 }
 
 async function refreshStats() {
@@ -646,6 +803,14 @@ settingsCloseBtn.addEventListener('click', closeSettingsDrawer);
 
 statsBtn.addEventListener('click', toggleStatsDrawer);
 statsCloseBtn.addEventListener('click', closeStatsDrawer);
+
+statsBody.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.id === 'stats-download-btn') {
+    downloadStatsExport();
+  }
+});
 
 msgInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
