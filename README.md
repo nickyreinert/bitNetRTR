@@ -1,6 +1,7 @@
-# vvpp Open - very versatile performance plattorm - open
+# OPEN VVPP - open & very versatile performance platform
 
 This is a ready-to-run implementation of Microsoft's [bitNet](https://github.com/microsoft/bitNet) framework. It allows you to run bitnet.cpp - an inference framework for 1-bit LLMs - on weak hardware. 
+
 ## Quick start
 
 Run:
@@ -12,8 +13,10 @@ curl -fsSL https://raw.githubusercontent.com/nickyreinert/bitNetRTR/main/install
 What this does:
 
 - downloads `install.sh`
-- clones the repository into `~/.local/share/bitNetRTR`
-- installs required dependencies unless you explicitly skip them
+- asks where to install: `~/.local/share/bitNetRTR` or current folder
+- clones/updates the repository in the selected location
+- checks for `git` and `docker compose` (does not install host packages)
+- runs the project in Docker-only mode (`--skip-install-deps`)
 - hands off to the project-local `bitNetRTR.sh`
 
 ## After install
@@ -40,3 +43,5 @@ Skip dependency installation:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nickyreinert/bitNetRTR/main/install.sh | bash -s -- --skip-install-deps
 ```
+
+Note: the installer now always skips host dependency installation. The flag is accepted for backwards compatibility.

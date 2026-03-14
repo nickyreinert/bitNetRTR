@@ -561,8 +561,9 @@ async function send() {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamDone = false;
 
-    while (true) {
+    while (!streamDone) {
       const { value, done } = await reader.read();
       if (done) break;
 
@@ -590,7 +591,9 @@ async function send() {
           continue;
         }
         if (eventType === 'done') {
-          continue;
+          streamDone = true;
+          setStatus('done');
+          break;
         }
         if (dataLines.length) {
           stopWaitingAnimation(aiBox);
@@ -601,7 +604,11 @@ async function send() {
       }
     }
 
-    setStatus('done');
+    if (streamDone) {
+      await reader.cancel();
+    } else {
+      setStatus('done');
+    }
   } catch (err) {
     stopWaitingAnimation(aiBox);
     if (err.name === 'AbortError') {
