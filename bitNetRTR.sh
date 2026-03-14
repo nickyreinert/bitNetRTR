@@ -409,7 +409,10 @@ load_saved_runtime_config() {
 	fi
 
 	if [[ "${COMPUTE_MODE}" != "cpu" && "${COMPUTE_MODE}" != "gpu" ]]; then
-		if [[ -f "${runtime_path}" ]] && grep -q "^[[:space:]]*gpus:[[:space:]]*all" "${runtime_path}"; then
+		if [[ -f "${runtime_path}" ]] && (
+			grep -q "^[[:space:]]*gpus:[[:space:]]*all" "${runtime_path}" \
+			|| grep -q "^[[:space:]]*gpus:[[:space:]]*$" "${runtime_path}"
+		); then
 			COMPUTE_MODE="gpu"
 		elif [[ -f "${runtime_path}" ]] && grep -q 'NVIDIA_VISIBLE_DEVICES:[[:space:]]*""' "${runtime_path}"; then
 			COMPUTE_MODE="cpu"
@@ -454,7 +457,8 @@ write_runtime_compose() {
 		cat >"${runtime_path}" <<'EOF'
 services:
   bitnet-api:
-    gpus: all
+		gpus:
+			- all
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
