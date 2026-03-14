@@ -4,6 +4,13 @@ global:
         models: 
             - "models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf"
             - "models/BitNet-b1.58-2B-4T/ggml-model-i2_m.gguf"
+            - "models/bitnet_b1_58-large/ggml-model-i2_s.gguf"
+            - "models/bitnet_b1_58-3B/ggml-model-i2_s.gguf"
+            - "models/Llama3-8B-1.58-100B-tokens/ggml-model-i2_s.gguf"
+            - "models/Falcon3-1B-Instruct-1.58bit/ggml-model-i2_s.gguf"
+            - "models/Falcon3-3B-Instruct-1.58bit/ggml-model-i2_s.gguf"
+            - "models/Falcon3-7B-Instruct-1.58bit/ggml-model-i2_s.gguf"
+            - "models/Falcon3-10B-Instruct-1.58bit/ggml-model-i2_s.gguf"
         repo_dir: third_party/BitNet
         conversation_mode: true
         limits:

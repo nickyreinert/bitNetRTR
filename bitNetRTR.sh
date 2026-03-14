@@ -650,6 +650,7 @@ MENU_ITEMS=(
 	"Stop stack"
 	"Rebuild + start stack"
 	"View logs (follow)"
+	"Download model(s) (container)"
 	"Sync/update git submodules"
 	"Update wrapper repo (git pull)"
 	"Run FastAPI app directly"
@@ -958,21 +959,24 @@ tui_run_action() {
 			follow_logs || ok=0
 			;;
 		9)
-			ensure_bitnet_submodule || ok=0
+			download_models_in_container || ok=0
 			;;
 		10)
-			update_repo || ok=0
+			ensure_bitnet_submodule || ok=0
 			;;
 		11)
-			run_app_backend
+			update_repo || ok=0
 			;;
 		12)
-			run_native_bitnet
+			run_app_backend
 			;;
 		13)
-			build_bitnet_dependency_in_container || ok=0
+			run_native_bitnet
 			;;
 		14)
+			build_bitnet_dependency_in_container || ok=0
+			;;
+		15)
 			info "Bye."
 			exit 0
 			;;
@@ -1111,14 +1115,112 @@ display_main_menu() {
  6) Stop stack
  7) Rebuild + start stack
  8) View logs (follow)
- 9) Sync/update git submodules
-10) Update wrapper repo (git pull)
-11) Run FastAPI app directly
-12) Run native BitNet CLI
-13) Build BitNet dependency (container)
+ 9) Download model(s) (container)
+10) Sync/update git submodules
+11) Update wrapper repo (git pull)
+12) Run FastAPI app directly
+13) Run native BitNet CLI
+14) Build BitNet dependency (container)
  q) Quit
 ===================================================
 EOF
+}
+
+download_models_in_container() {
+	ensure_runtime_files
+	info "Download selected model(s) inside container"
+
+	cat <<'EOF'
+Supported model sources:
+  1) 1bitLLM/bitnet_b1_58-large               -> models/bitnet_b1_58-large
+  2) 1bitLLM/bitnet_b1_58-3B                  -> models/bitnet_b1_58-3B
+  3) HF1BitLLM/Llama3-8B-1.58-100B-tokens     -> models/Llama3-8B-1.58-100B-tokens
+  4) tiiuae/Falcon3-1B-Instruct-1.58bit       -> models/Falcon3-1B-Instruct-1.58bit
+  5) tiiuae/Falcon3-3B-Instruct-1.58bit       -> models/Falcon3-3B-Instruct-1.58bit
+  6) tiiuae/Falcon3-7B-Instruct-1.58bit       -> models/Falcon3-7B-Instruct-1.58bit
+  7) tiiuae/Falcon3-10B-Instruct-1.58bit      -> models/Falcon3-10B-Instruct-1.58bit
+
+Enter one or more numbers (comma/space separated), e.g.:
+  1,3,7
+EOF
+
+	local selection
+	selection="$(prompt "Model selection" "1")"
+	if [[ -z "${selection}" ]]; then
+		warn "No selection provided."
+		return 1
+	fi
+
+	local -a picked_ids=()
+	local token
+	selection="${selection//,/ }"
+	for token in ${selection}; do
+		case "${token}" in
+			1|2|3|4|5|6|7)
+				picked_ids+=("${token}")
+				;;
+			*)
+				warn "Ignoring invalid selection: ${token}"
+				;;
+		esac
+	done
+
+	if [[ ${#picked_ids[@]} -eq 0 ]]; then
+		err "No valid model selections."
+		return 1
+	fi
+
+	# Ensure API container exists and has required tooling context.
+	(cd "${PROJECT_DIR}" && docker compose -f docker-compose.yml -f docker-compose.runtime.yml up -d bitnet-api)
+
+	local id hf_repo model_dir cmd
+	for id in "${picked_ids[@]}"; do
+		hf_repo=""
+		model_dir=""
+		case "${id}" in
+			1)
+				hf_repo="1bitLLM/bitnet_b1_58-large"
+				model_dir="models/bitnet_b1_58-large"
+				;;
+			2)
+				hf_repo="1bitLLM/bitnet_b1_58-3B"
+				model_dir="models/bitnet_b1_58-3B"
+				;;
+			3)
+				hf_repo="HF1BitLLM/Llama3-8B-1.58-100B-tokens"
+				model_dir="models/Llama3-8B-1.58-100B-tokens"
+				;;
+			4)
+				hf_repo="tiiuae/Falcon3-1B-Instruct-1.58bit"
+				model_dir="models/Falcon3-1B-Instruct-1.58bit"
+				;;
+			5)
+				hf_repo="tiiuae/Falcon3-3B-Instruct-1.58bit"
+				model_dir="models/Falcon3-3B-Instruct-1.58bit"
+				;;
+			6)
+				hf_repo="tiiuae/Falcon3-7B-Instruct-1.58bit"
+				model_dir="models/Falcon3-7B-Instruct-1.58bit"
+				;;
+			7)
+				hf_repo="tiiuae/Falcon3-10B-Instruct-1.58bit"
+				model_dir="models/Falcon3-10B-Instruct-1.58bit"
+				;;
+		esac
+
+		info "Downloading ${hf_repo} -> ${model_dir}"
+		cmd=$(cat <<EOS
+set -e
+cd /app/BitNet/third_party/BitNet
+python3 setup_env.py --hf-repo ${hf_repo} --model-dir /app/BitNet/${model_dir} --quant-type i2_s
+EOS
+)
+
+		(cd "${PROJECT_DIR}" && docker compose -f docker-compose.yml -f docker-compose.runtime.yml exec -T bitnet-api bash -lc "${cmd}")
+		info "Downloaded: ${model_dir}"
+	done
+
+	info "Model download(s) completed."
 }
 
 build_bitnet_dependency_in_container() {
@@ -1270,18 +1372,21 @@ interactive_control_menu() {
 				follow_logs
 				;;
 			9)
-				ensure_bitnet_submodule
+				download_models_in_container
 				;;
 			10)
-				update_repo
+				ensure_bitnet_submodule
 				;;
 			11)
-				run_app_backend
+				update_repo
 				;;
 			12)
-				run_native_bitnet
+				run_app_backend
 				;;
 			13)
+				run_native_bitnet
+				;;
+			14)
 				build_bitnet_dependency_in_container
 				;;
 			q|Q)
@@ -1350,13 +1455,14 @@ whiptail_menu_loop() {
 			"6"  "Stop stack" \
 			"7"  "Rebuild + start stack" \
 			"8"  "View logs (follow)" \
-			"9"  "Sync/update git submodules" \
-			"10" "Update wrapper repo (git pull)" \
-			"11" "Run FastAPI app directly" \
-			"12" "Run native BitNet CLI" \
-			"13" "Build BitNet dependency (container)" \
-			"14" "Show status snapshot" \
-			"15" "Live monitor (watch)" \
+			"9"  "Download model(s) (container)" \
+			"10" "Sync/update git submodules" \
+			"11" "Update wrapper repo (git pull)" \
+			"12" "Run FastAPI app directly" \
+			"13" "Run native BitNet CLI" \
+			"14" "Build BitNet dependency (container)" \
+			"15" "Show status snapshot" \
+			"16" "Live monitor (watch)" \
 			"q"  "Quit" \
 			3>&1 1>&2 2>&3)"
 
@@ -1395,24 +1501,27 @@ whiptail_menu_loop() {
 				follow_logs
 				;;
 			9)
-				ensure_bitnet_submodule
+				download_models_in_container
 				;;
 			10)
-				update_repo
+				ensure_bitnet_submodule
 				;;
 			11)
-				run_app_backend
+				update_repo
 				;;
 			12)
-				run_native_bitnet
+				run_app_backend
 				;;
 			13)
-				build_bitnet_dependency_in_container
+				run_native_bitnet
 				;;
 			14)
-				whiptail --title "BitNetRTR Status" --msgbox "$(whiptail_status_snapshot)" 24 92
+				build_bitnet_dependency_in_container
 				;;
 			15)
+				whiptail --title "BitNetRTR Status" --msgbox "$(whiptail_status_snapshot)" 24 92
+				;;
+			16)
 				run_live_monitor
 				;;
 			esac

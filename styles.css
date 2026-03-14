@@ -160,6 +160,10 @@ body {
   text-transform: uppercase;
 }
 
+.subtitle a {
+  color: var(--accent);
+  text-decoration: none;
+}
 .status {
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.66rem;

@@ -23,6 +23,7 @@ What this does:
 
 - check `config.yaml` for configuration options, you may add and configure models there
 - run `bitNetRTR.sh` to start the server
+- in the wrapper menu, use `Download model(s) (container)` to fetch selected supported models on demand
 
 ### Installer options
 
